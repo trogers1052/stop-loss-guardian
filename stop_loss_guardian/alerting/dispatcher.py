@@ -1,7 +1,7 @@
 """Alert dispatcher with escalation logic."""
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from ..config import settings
@@ -123,7 +123,7 @@ class AlertDispatcher:
 
         # Check if we should escalate based on time
         if last_alert_time:
-            time_since_last = datetime.now() - last_alert_time
+            time_since_last = datetime.now(timezone.utc) - last_alert_time
             escalation_interval = timedelta(minutes=settings.escalation_interval_minutes)
 
             if time_since_last >= escalation_interval:

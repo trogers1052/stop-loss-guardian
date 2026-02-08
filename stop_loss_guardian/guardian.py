@@ -6,7 +6,7 @@ This service monitors all open positions and SCREAMS if any position lacks a sto
 
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import List, Optional
 
@@ -278,7 +278,7 @@ class StopLossGuardian:
             return True
 
         # Check if enough time has passed for escalation
-        time_since_last = datetime.now() - tracking.updated_at
+        time_since_last = datetime.now(timezone.utc) - tracking.updated_at
         escalation_interval = timedelta(minutes=settings.escalation_interval_minutes)
 
         return time_since_last >= escalation_interval
