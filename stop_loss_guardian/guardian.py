@@ -130,12 +130,23 @@ class StopLossGuardian:
                 except:
                     pass
 
-            # Get stop loss info from tracking table
-            tracking = self.repo.get_stop_loss_tracking(pos.symbol)
-            if tracking:
-                pos.stop_loss_price = tracking.stop_loss_price
-                pos.stop_loss_type = tracking.stop_loss_type
-                pos.stop_loss_pct = tracking.stop_loss_pct
+            # Get stop loss info - first check Redis (from Robinhood), then tracking table
+            stop_order = self.redis.get_stop_order(pos.symbol)
+            if stop_order:
+                # Stop loss exists in Robinhood - use that
+                pos.stop_loss_price = Decimal(stop_order["stop_price"])
+                pos.stop_loss_type = "robinhood"
+                # Calculate stop loss percentage from entry price
+                if pos.entry_price and pos.entry_price > 0:
+                    pos.stop_loss_pct = ((pos.entry_price - pos.stop_loss_price) / pos.entry_price) * 100
+                logger.debug(f"{pos.symbol}: Found Robinhood stop @ ${pos.stop_loss_price}")
+            else:
+                # Fall back to tracking table (manual entries)
+                tracking = self.repo.get_stop_loss_tracking(pos.symbol)
+                if tracking and tracking.stop_loss_price:
+                    pos.stop_loss_price = tracking.stop_loss_price
+                    pos.stop_loss_type = tracking.stop_loss_type
+                    pos.stop_loss_pct = tracking.stop_loss_pct
 
             enriched.append(pos)
 

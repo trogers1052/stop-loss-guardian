@@ -167,3 +167,44 @@ class RedisClient:
                 "equity_change": None,
                 "updated_at": None,
             }
+
+    def get_stop_order(self, symbol: str) -> Optional[Dict]:
+        """Get stop order for a specific symbol from Robinhood sync.
+
+        Args:
+            symbol: Stock symbol
+
+        Returns:
+            Stop order data dict or None if no stop order exists
+            Contains: order_id, symbol, stop_price, quantity, side, order_type, state, created_at
+        """
+        try:
+            data_str = self.client.hget("robinhood:stop_orders", symbol)
+            if not data_str:
+                return None
+            return json.loads(data_str)
+        except Exception as e:
+            logger.error(f"Failed to get stop order for {symbol}: {e}")
+            return None
+
+    def get_all_stop_orders(self) -> Dict[str, Dict]:
+        """Get all stop orders from Robinhood sync.
+
+        Returns:
+            Dict mapping symbol -> stop order data
+        """
+        try:
+            raw_orders = self.client.hgetall("robinhood:stop_orders")
+
+            orders = {}
+            for symbol, data_str in raw_orders.items():
+                try:
+                    order_data = json.loads(data_str)
+                    orders[symbol] = order_data
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse stop order data for {symbol}: {e}")
+
+            return orders
+        except Exception as e:
+            logger.error(f"Failed to get stop orders from Redis: {e}")
+            return {}
