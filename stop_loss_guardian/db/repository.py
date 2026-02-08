@@ -36,6 +36,26 @@ class Repository:
             logger.error(f"Failed to connect to database: {e}")
             raise
 
+    def ensure_connected(self):
+        """Ensure database connection is alive, reconnect if needed."""
+        try:
+            if self.conn is None or self.conn.closed:
+                logger.info("Connection lost, reconnecting...")
+                self.connect()
+                return
+
+            # Test connection
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT 1")
+        except Exception as e:
+            logger.warning(f"Connection check failed: {e}, reconnecting...")
+            try:
+                if self.conn:
+                    self.conn.close()
+            except:
+                pass
+            self.connect()
+
     def close(self):
         """Close database connection."""
         if self.conn:
@@ -72,6 +92,7 @@ class Repository:
                 ))
             return positions
         except Exception as e:
+            self.conn.rollback()
             logger.error(f"Failed to get open positions: {e}")
             return []
 
@@ -111,6 +132,7 @@ class Repository:
                 updated_at=row["updated_at"],
             )
         except Exception as e:
+            self.conn.rollback()
             logger.error(f"Failed to get stop loss tracking for {symbol}: {e}")
             return None
 
@@ -315,6 +337,7 @@ class Repository:
                 cur.execute(query)
                 return cur.fetchall()
         except Exception as e:
+            self.conn.rollback()
             logger.error(f"Failed to get positions without stop loss: {e}")
             return []
 
@@ -334,6 +357,7 @@ class Repository:
                 cur.execute(query, (str(-threshold_pct),))  # Negative because drawdown is negative
                 return cur.fetchall()
         except Exception as e:
+            self.conn.rollback()
             logger.error(f"Failed to get positions with critical drawdown: {e}")
             return []
 

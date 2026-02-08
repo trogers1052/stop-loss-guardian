@@ -73,6 +73,8 @@ class StopLossGuardian:
 
         while self._running:
             try:
+                # Ensure database connection is healthy
+                self.repo.ensure_connected()
                 self._check_all_positions()
             except Exception as e:
                 logger.error(f"Error in monitoring loop: {e}", exc_info=True)
