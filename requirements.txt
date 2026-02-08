@@ -1,0 +1,20 @@
+# Stop Loss Guardian Dependencies
+
+# Core
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# Database
+psycopg2-binary>=2.9.0
+
+# Redis
+redis>=5.0.0
+
+# Twilio (SMS + Phone calls)
+twilio>=8.0.0
+
+# HTTP client (for Telegram)
+httpx>=0.25.0
+
+# Utilities
+python-dotenv>=1.0.0
