@@ -363,7 +363,21 @@ class Repository:
 
     def cleanup_closed_positions(self):
         """Remove tracking for positions that are no longer open."""
-        query = """
+        # First delete dependent urgent_alerts rows
+        delete_alerts_query = """
+            DELETE FROM urgent_alerts ua
+            WHERE ua.stop_loss_tracking_id IN (
+                SELECT slt.id FROM stop_loss_tracking slt
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM journal_positions jp
+                    WHERE jp.id = slt.position_id
+                      AND jp.status = 'open'
+                )
+                AND slt.position_id IS NOT NULL
+            )
+        """
+        # Then delete the stop_loss_tracking rows
+        delete_tracking_query = """
             DELETE FROM stop_loss_tracking slt
             WHERE NOT EXISTS (
                 SELECT 1 FROM journal_positions jp
@@ -374,11 +388,15 @@ class Repository:
         """
         try:
             with self.conn.cursor() as cur:
-                cur.execute(query)
-                deleted = cur.rowcount
+                cur.execute(delete_alerts_query)
+                alerts_deleted = cur.rowcount
+                cur.execute(delete_tracking_query)
+                tracking_deleted = cur.rowcount
                 self.conn.commit()
-                if deleted > 0:
-                    logger.info(f"Cleaned up {deleted} closed positions from tracking")
+                if alerts_deleted > 0:
+                    logger.info(f"Cleaned up {alerts_deleted} urgent alerts for closed positions")
+                if tracking_deleted > 0:
+                    logger.info(f"Cleaned up {tracking_deleted} closed positions from tracking")
         except Exception as e:
             self.conn.rollback()
             logger.error(f"Failed to cleanup closed positions: {e}")
