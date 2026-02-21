@@ -42,6 +42,9 @@ class StopLossGuardian:
         # In-memory cooldowns for critical drawdown alerts (symbol → last alert time).
         # Resets on restart — worst case is one extra alert, which is acceptable.
         self._critical_drawdown_cooldowns: Dict[str, datetime] = {}
+        # In-memory cooldowns for earnings proximity alerts (symbol → last alert time).
+        # Fires at most once per day per symbol to avoid noise.
+        self._earnings_alert_cooldowns: Dict[str, datetime] = {}
 
     def start(self):
         """Initialize connections and start monitoring."""
@@ -233,6 +236,10 @@ class StopLossGuardian:
         if not tracking:
             return
 
+        # Earnings proximity is date-based — check regardless of acknowledged
+        # or price-staleness state since it doesn't depend on either.
+        self._check_earnings_proximity(position, tracking)
+
         # Skip if acknowledged
         if tracking.acknowledged:
             return
@@ -277,6 +284,61 @@ class StopLossGuardian:
         if position.stop_loss_triggered:
             self._handle_stop_triggered(position, tracking)
 
+    def _check_earnings_proximity(self, position: Position, tracking):
+        """Alert if earnings are within the configured warning window.
+
+        Uses the tracking record's next_earnings_date first; falls back to
+        Redis (robinhood:earnings) if the DB field is NULL.  Alerts fire at
+        most once per calendar day per symbol via an in-memory cooldown.
+        """
+        from datetime import date
+
+        earnings_dt = tracking.next_earnings_date
+
+        # Fallback: try Redis if DB field is empty
+        if earnings_dt is None:
+            raw = self.redis.get_earnings_date(position.symbol)
+            if raw:
+                try:
+                    earnings_dt = datetime.fromisoformat(raw)
+                except ValueError:
+                    logger.warning(
+                        f"{position.symbol}: unparseable earnings date from Redis: {raw!r}"
+                    )
+                    return
+
+        if earnings_dt is None:
+            return
+
+        # Normalise to a date for the comparison
+        earnings_date = earnings_dt.date() if isinstance(earnings_dt, datetime) else earnings_dt
+        today = date.today()
+        days_until = (earnings_date - today).days
+
+        if days_until < 0 or days_until > settings.earnings_warning_days:
+            return
+
+        # Cooldown: at most one alert per calendar day per symbol
+        last_alert = self._earnings_alert_cooldowns.get(position.symbol)
+        if last_alert is not None and last_alert.date() == today:
+            return
+
+        message = (
+            f"\u26a0\ufe0f EARNINGS ALERT: {position.symbol} has earnings "
+            f"on {earnings_date.strftime('%Y-%m-%d')} ({days_until} day{'s' if days_until != 1 else ''} away). "
+            f"Review position and consider tightening stop loss."
+        )
+
+        sent = self.telegram.send_alert(message)
+        if sent:
+            self._earnings_alert_cooldowns[position.symbol] = datetime.now(timezone.utc)
+            logger.warning(
+                f"Earnings proximity alert sent for {position.symbol}: "
+                f"{days_until} day(s) until {earnings_date}"
+            )
+        else:
+            logger.error(f"Failed to send earnings proximity alert for {position.symbol}")
+
     def _handle_missing_stop_loss(
         self,
         position: Position,
@@ -314,7 +376,7 @@ class StopLossGuardian:
         )
 
         # Send alert
-        self.dispatcher.send_missing_stop_loss_alert(
+        alert_sent = self.dispatcher.send_missing_stop_loss_alert(
             symbol=position.symbol,
             entry_price=float(position.entry_price),
             current_price=current_price,
@@ -324,6 +386,15 @@ class StopLossGuardian:
             last_alert_time=tracking.updated_at,
             stop_loss_tracking_id=tracking.id,
         )
+
+        # Only mark alert sent if dispatch actually succeeded — otherwise the
+        # escalation counter advances without the trader receiving the alert.
+        if not alert_sent:
+            logger.error(
+                f"Alert dispatch FAILED for {position.symbol} — "
+                f"NOT marking as sent so escalation retries next cycle"
+            )
+            return
 
         # Update tracking
         channel = "telegram" if escalation_level == 0 else "sms" if escalation_level == 1 else "phone_call"

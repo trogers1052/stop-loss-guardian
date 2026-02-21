@@ -127,7 +127,7 @@ class Repository:
         except Exception as e:
             self.conn.rollback()
             logger.error(f"Failed to get open positions: {e}")
-            return []
+            raise
 
     def get_stop_loss_tracking(self, symbol: str) -> Optional[StopLossRecord]:
         """Get stop loss tracking record for a symbol."""
@@ -167,7 +167,7 @@ class Repository:
         except Exception as e:
             self.conn.rollback()
             logger.error(f"Failed to get stop loss tracking for {symbol}: {e}")
-            return None
+            raise
 
     def upsert_stop_loss_tracking(
         self,
@@ -372,7 +372,7 @@ class Repository:
         except Exception as e:
             self.conn.rollback()
             logger.error(f"Failed to get positions without stop loss: {e}")
-            return []
+            raise
 
     def get_positions_with_critical_drawdown(self, threshold_pct: Decimal) -> List[Dict[str, Any]]:
         """Get positions with drawdown exceeding threshold."""
@@ -392,7 +392,7 @@ class Repository:
         except Exception as e:
             self.conn.rollback()
             logger.error(f"Failed to get positions with critical drawdown: {e}")
-            return []
+            raise
 
     def cleanup_closed_positions(self):
         """Remove tracking for positions that are no longer open.

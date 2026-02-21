@@ -223,6 +223,22 @@ class RedisClient:
         except Exception as e:
             logger.warning(f"Failed to persist drawdown cooldown for {symbol}: {e}")
 
+    def get_earnings_date(self, symbol: str) -> Optional[str]:
+        """Get next earnings date for a symbol from Robinhood sync.
+
+        Returns:
+            ISO-format date string (e.g. '2026-03-15') or None if not available.
+        """
+        try:
+            data_str = self.client.hget("robinhood:earnings", symbol)
+            if not data_str:
+                return None
+            data = json.loads(data_str)
+            return data.get("next_earnings_date")
+        except Exception as e:
+            logger.warning(f"Failed to get earnings date for {symbol}: {e}")
+            return None
+
     def get_all_stop_orders(self) -> Dict[str, Dict]:
         """Get all stop orders from Robinhood sync.
 
