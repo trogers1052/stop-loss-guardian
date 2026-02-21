@@ -187,6 +187,42 @@ class RedisClient:
             logger.error(f"Failed to get stop order for {symbol}: {e}")
             return None
 
+    # ------------------------------------------------------------------
+    # Drawdown cooldown persistence
+    # ------------------------------------------------------------------
+    _COOLDOWN_KEY = "guardian:drawdown_cooldowns"
+
+    def get_drawdown_cooldowns(self) -> Dict[str, "datetime"]:
+        """Load all critical-drawdown cooldown timestamps from Redis.
+
+        Returns a dict mapping symbol -> aware UTC datetime.
+        Symbols whose stored value cannot be parsed are silently skipped.
+        """
+        from datetime import datetime, timezone
+        try:
+            raw = self.client.hgetall(self._COOLDOWN_KEY)
+        except Exception as e:
+            logger.warning(f"Failed to read drawdown cooldowns from Redis: {e}")
+            return {}
+
+        result: Dict[str, datetime] = {}
+        for symbol, ts_str in raw.items():
+            try:
+                dt = datetime.fromisoformat(ts_str)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                result[symbol] = dt
+            except ValueError:
+                logger.warning(f"Ignoring unparseable cooldown timestamp for {symbol}: {ts_str!r}")
+        return result
+
+    def set_drawdown_cooldown(self, symbol: str, timestamp: "datetime") -> None:
+        """Persist a single cooldown timestamp to Redis."""
+        try:
+            self.client.hset(self._COOLDOWN_KEY, symbol, timestamp.isoformat())
+        except Exception as e:
+            logger.warning(f"Failed to persist drawdown cooldown for {symbol}: {e}")
+
     def get_all_stop_orders(self) -> Dict[str, Dict]:
         """Get all stop orders from Robinhood sync.
 

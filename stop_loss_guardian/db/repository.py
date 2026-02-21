@@ -362,29 +362,53 @@ class Repository:
             return []
 
     def cleanup_closed_positions(self):
-        """Remove tracking for positions that are no longer open."""
-        # First delete dependent urgent_alerts rows
+        """Remove tracking for positions that are no longer open.
+
+        Handles two cases:
+        - Rows with a known position_id where that position is no longer open.
+        - Rows with NULL position_id (unlinked records) where the symbol has
+          no open positions at all. These would never be cleaned up by the
+          position_id check alone, potentially leaving stale acknowledged=true
+          rows that suppress alerts for genuinely new positions.
+        """
+        # First delete dependent urgent_alerts rows (both cases)
         delete_alerts_query = """
             DELETE FROM urgent_alerts ua
             WHERE ua.stop_loss_tracking_id IN (
                 SELECT slt.id FROM stop_loss_tracking slt
-                WHERE NOT EXISTS (
+                WHERE
+                    -- Case 1: linked to a specific position that is no longer open
+                    (slt.position_id IS NOT NULL AND NOT EXISTS (
+                        SELECT 1 FROM journal_positions jp
+                        WHERE jp.id = slt.position_id
+                          AND jp.status = 'open'
+                    ))
+                    OR
+                    -- Case 2: unlinked row (NULL position_id) and symbol has no open positions
+                    (slt.position_id IS NULL AND NOT EXISTS (
+                        SELECT 1 FROM journal_positions jp
+                        WHERE jp.symbol = slt.symbol
+                          AND jp.status = 'open'
+                    ))
+            )
+        """
+        # Then delete the stop_loss_tracking rows (same two cases)
+        delete_tracking_query = """
+            DELETE FROM stop_loss_tracking slt
+            WHERE
+                -- Case 1: linked to a specific position that is no longer open
+                (slt.position_id IS NOT NULL AND NOT EXISTS (
                     SELECT 1 FROM journal_positions jp
                     WHERE jp.id = slt.position_id
                       AND jp.status = 'open'
-                )
-                AND slt.position_id IS NOT NULL
-            )
-        """
-        # Then delete the stop_loss_tracking rows
-        delete_tracking_query = """
-            DELETE FROM stop_loss_tracking slt
-            WHERE NOT EXISTS (
-                SELECT 1 FROM journal_positions jp
-                WHERE jp.id = slt.position_id
-                  AND jp.status = 'open'
-            )
-            AND slt.position_id IS NOT NULL
+                ))
+                OR
+                -- Case 2: unlinked row (NULL position_id) and symbol has no open positions
+                (slt.position_id IS NULL AND NOT EXISTS (
+                    SELECT 1 FROM journal_positions jp
+                    WHERE jp.symbol = slt.symbol
+                      AND jp.status = 'open'
+                ))
         """
         try:
             with self.conn.cursor() as cur:

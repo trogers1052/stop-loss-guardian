@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     # Monitoring
     check_interval_seconds: int = Field(default=60, alias="CHECK_INTERVAL_SECONDS")
     market_hours_only: bool = Field(default=True, alias="MARKET_HOURS_ONLY")
+    price_staleness_minutes: int = Field(default=15, alias="PRICE_STALENESS_MINUTES")
 
     # Logging
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")

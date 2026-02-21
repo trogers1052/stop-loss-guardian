@@ -8,7 +8,7 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from .config import settings
 from .models import Position, Alert, AlertType, Severity
@@ -39,6 +39,9 @@ class StopLossGuardian:
         self.dispatcher: Optional[AlertDispatcher] = None
         self.position_sizer = PositionSizer()
         self._running = False
+        # In-memory cooldowns for critical drawdown alerts (symbol → last alert time).
+        # Resets on restart — worst case is one extra alert, which is acceptable.
+        self._critical_drawdown_cooldowns: Dict[str, datetime] = {}
 
     def start(self):
         """Initialize connections and start monitoring."""
@@ -47,6 +50,17 @@ class StopLossGuardian:
         # Connect to services
         self.repo.connect()
         self.redis.connect()
+
+        # Restore cooldowns that survived the previous process lifetime.
+        # Worst case if Redis is unavailable: one extra alert per symbol,
+        # which is acceptable — losing an alert is worse than a duplicate.
+        persisted = self.redis.get_drawdown_cooldowns()
+        if persisted:
+            self._critical_drawdown_cooldowns.update(persisted)
+            logger.info(
+                f"Restored {len(persisted)} drawdown cooldown(s) from Redis: "
+                f"{list(persisted.keys())}"
+            )
 
         if settings.twilio_enabled:
             self.twilio.connect()
@@ -67,17 +81,50 @@ class StopLossGuardian:
         self.repo.close()
         self.redis.close()
 
+    # Number of consecutive monitoring-loop errors before sending a degraded alert.
+    _ERROR_ALERT_THRESHOLD = 5
+
     def _run_monitoring_loop(self):
         """Main monitoring loop."""
         logger.info(f"Starting monitoring loop (interval: {settings.check_interval_seconds}s)")
+
+        consecutive_errors = 0
 
         while self._running:
             try:
                 # Ensure database connection is healthy
                 self.repo.ensure_connected()
                 self._check_all_positions()
+
+                if consecutive_errors > 0:
+                    logger.info(
+                        f"Monitoring loop recovered after {consecutive_errors} consecutive error(s)"
+                    )
+                consecutive_errors = 0
+
             except Exception as e:
-                logger.error(f"Error in monitoring loop: {e}", exc_info=True)
+                consecutive_errors += 1
+                logger.error(
+                    f"Error in monitoring loop (consecutive: {consecutive_errors}): {e}",
+                    exc_info=True,
+                )
+
+                if consecutive_errors == self._ERROR_ALERT_THRESHOLD:
+                    # Escalate: positions are not being monitored.
+                    logger.critical(
+                        f"Stop Loss Guardian: {consecutive_errors} consecutive monitoring failures. "
+                        f"Positions may be UNPROTECTED. Last error: {e}"
+                    )
+                    try:
+                        self.telegram.send_alert(
+                            f"🚨 STOP LOSS GUARDIAN DEGRADED\n\n"
+                            f"{consecutive_errors} consecutive monitoring failures.\n"
+                            f"Positions may be UNPROTECTED.\n\n"
+                            f"Last error: {e}\n\n"
+                            f"Check Pi logs immediately."
+                        )
+                    except Exception as alert_exc:
+                        logger.error(f"Failed to send degraded-service alert: {alert_exc}")
 
             # Sleep until next check
             time.sleep(settings.check_interval_seconds)
@@ -127,8 +174,11 @@ class StopLossGuardian:
             if redis_data.get("updated_at"):
                 try:
                     pos.price_updated_at = datetime.fromisoformat(redis_data["updated_at"])
-                except:
-                    pass
+                except ValueError as exc:
+                    logger.warning(
+                        f"{pos.symbol}: could not parse price_updated_at "
+                        f"'{redis_data['updated_at']}' from Redis: {exc}"
+                    )
 
             # Get stop loss info - first check Redis (from Robinhood), then tracking table
             stop_order = self.redis.get_stop_order(pos.symbol)
@@ -176,9 +226,31 @@ class StopLossGuardian:
         if tracking.acknowledged:
             return
 
-        # Check 1: Missing stop loss
+        # Determine price freshness once — used in both branches below.
+        price_is_stale = self._is_price_stale(position)
+
+        # Check 1: Missing stop loss — always alert regardless of price freshness.
+        # When price data is stale we still fire the alert (the position is still
+        # unprotected) but we suppress the current price / drawdown fields so the
+        # trader isn't shown hours-old figures as if they were live.
         if not position.has_stop_loss:
-            self._handle_missing_stop_loss(position, tracking)
+            if price_is_stale:
+                logger.warning(
+                    f"{position.symbol}: price data is stale — missing stop loss alert "
+                    f"will omit current price/drawdown to avoid misleading figures"
+                )
+            self._handle_missing_stop_loss(position, tracking, price_is_stale)
+            return
+
+        # Checks 2 and 3 depend on a current price. Skip them when price data is
+        # stale so we never act on hours-old drawdown figures.
+        if price_is_stale:
+            logger.warning(
+                f"{position.symbol}: price data is stale "
+                f"(updated_at={position.price_updated_at}, "
+                f"threshold={settings.price_staleness_minutes}min) "
+                f"— skipping drawdown and stop-trigger checks"
+            )
             return
 
         # Check 2: Significant drawdown
@@ -194,7 +266,12 @@ class StopLossGuardian:
         if position.stop_loss_triggered:
             self._handle_stop_triggered(position, tracking)
 
-    def _handle_missing_stop_loss(self, position: Position, tracking):
+    def _handle_missing_stop_loss(
+        self,
+        position: Position,
+        tracking,
+        price_is_stale: bool = False,
+    ):
         """Handle a position with no stop loss configured."""
 
         # Determine if we should send an alert (escalation logic)
@@ -212,12 +289,25 @@ class StopLossGuardian:
         # Determine escalation level
         escalation_level = self._get_escalation_level(tracking)
 
+        # When price data is stale, omit live-price fields so the alert
+        # doesn't show hours-old figures as if they were current.
+        current_price = (
+            float(position.current_price)
+            if position.current_price and not price_is_stale
+            else None
+        )
+        drawdown_pct = (
+            float(position.current_drawdown_pct)
+            if position.current_drawdown_pct and not price_is_stale
+            else None
+        )
+
         # Send alert
         self.dispatcher.send_missing_stop_loss_alert(
             symbol=position.symbol,
             entry_price=float(position.entry_price),
-            current_price=float(position.current_price) if position.current_price else None,
-            drawdown_pct=float(position.current_drawdown_pct) if position.current_drawdown_pct else None,
+            current_price=current_price,
+            drawdown_pct=drawdown_pct,
             suggested_stop=float(suggested_stop),
             escalation_level=escalation_level,
             last_alert_time=tracking.updated_at,
@@ -236,8 +326,8 @@ class StopLossGuardian:
 
     def _handle_critical_drawdown(self, position: Position, tracking):
         """Handle a position with critical drawdown (> 10%)."""
-        # Only alert once per critical threshold
-        # This is separate from missing stop loss alerts
+        if not self._should_send_drawdown_alert(position.symbol):
+            return
 
         self.dispatcher.send_drawdown_alert(
             symbol=position.symbol,
@@ -247,6 +337,8 @@ class StopLossGuardian:
             stop_loss_price=float(position.stop_loss_price) if position.stop_loss_price else None,
             stop_loss_tracking_id=tracking.id,
         )
+
+        self._set_drawdown_cooldown(position.symbol)
 
         logger.critical(
             f"CRITICAL DRAWDOWN: {position.symbol} down {abs(position.current_drawdown_pct):.1f}%!"
@@ -310,6 +402,40 @@ class StopLossGuardian:
             return 2
 
         return current_level
+
+    def _should_send_drawdown_alert(self, symbol: str) -> bool:
+        """Return True if enough time has passed to send another critical drawdown alert."""
+        last = self._critical_drawdown_cooldowns.get(symbol)
+        if last is None:
+            return True
+        return (datetime.now(timezone.utc) - last) >= timedelta(
+            minutes=settings.escalation_interval_minutes
+        )
+
+    def _set_drawdown_cooldown(self, symbol: str) -> None:
+        """Record that a critical drawdown alert was just sent for this symbol.
+
+        The timestamp is stored both in the in-memory dict (for fast reads
+        within the same process lifetime) and in Redis (so cooldowns survive
+        a service restart).
+        """
+        now = datetime.now(timezone.utc)
+        self._critical_drawdown_cooldowns[symbol] = now
+        self.redis.set_drawdown_cooldown(symbol, now)
+
+    def _is_price_stale(self, position: Position) -> bool:
+        """Return True if the position's price data is too old to trust.
+
+        A None price_updated_at (Redis had no data) is always treated as stale.
+        Handles both timezone-aware and timezone-naive datetimes from Redis.
+        """
+        if position.price_updated_at is None:
+            return True
+        updated_at = position.price_updated_at
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc) - updated_at
+        return age > timedelta(minutes=settings.price_staleness_minutes)
 
     def check_position_size(
         self,
