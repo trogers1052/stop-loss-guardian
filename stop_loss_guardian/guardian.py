@@ -75,11 +75,18 @@ class StopLossGuardian:
         self._run_monitoring_loop()
 
     def stop(self):
-        """Stop monitoring and cleanup."""
-        logger.info("Stopping Stop Loss Guardian")
+        """Stop monitoring and cleanup all resources.
+
+        Safe to call multiple times (idempotent).  The signal handler and the
+        ``finally`` block in ``main()`` may both invoke this method.
+        """
+        if not self._running and self.repo.conn is None and self.redis.client is None:
+            return  # already stopped
+        logger.info("Stopping Stop Loss Guardian...")
         self._running = False
         self.repo.close()
         self.redis.close()
+        logger.info("Stop Loss Guardian shutdown complete")
 
     # Number of consecutive monitoring-loop errors before sending a degraded alert.
     _ERROR_ALERT_THRESHOLD = 5
