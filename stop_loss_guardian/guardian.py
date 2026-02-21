@@ -424,8 +424,11 @@ class StopLossGuardian:
         a service restart).
         """
         now = datetime.now(timezone.utc)
+        try:
+            self.redis.set_drawdown_cooldown(symbol, now)
+        except Exception as e:
+            logger.error(f"Failed to persist drawdown cooldown for {symbol} to Redis: {e}")
         self._critical_drawdown_cooldowns[symbol] = now
-        self.redis.set_drawdown_cooldown(symbol, now)
 
     def _is_price_stale(self, position: Position) -> bool:
         """Return True if the position's price data is too old to trust.

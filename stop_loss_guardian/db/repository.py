@@ -49,12 +49,16 @@ class Repository:
     def ensure_connected(self):
         """Ensure database connection is alive, reconnect if needed."""
         try:
-            if self.conn is None or self.conn.closed:
+            if self.conn is not None and self.conn.closed:
+                logger.info("Connection is closed, discarding...")
+                self.conn = None
+
+            if self.conn is None:
                 logger.info("Connection lost, reconnecting...")
-                if self._pool and self.conn:
-                    self._pool.putconn(self.conn)
-                self.conn = self._pool.getconn() if self._pool else None
-                if not self.conn:
+                if self._pool:
+                    self.conn = self._pool.getconn()
+                    self.conn.autocommit = False
+                else:
                     self.connect()
                 return
 
@@ -64,11 +68,11 @@ class Repository:
         except Exception as e:
             logger.warning(f"Connection check failed: {e}, reconnecting...")
             try:
-                if self._pool and self.conn:
+                if self._pool and self.conn and not self.conn.closed:
                     self._pool.putconn(self.conn)
-                    self.conn = None
             except Exception:
                 pass
+            self.conn = None
             if self._pool:
                 self.conn = self._pool.getconn()
                 self.conn.autocommit = False
@@ -78,10 +82,17 @@ class Repository:
     def close(self):
         """Return connection to pool and close the pool."""
         if self._pool and self.conn:
-            self._pool.putconn(self.conn)
+            try:
+                if not self.conn.closed:
+                    self._pool.putconn(self.conn)
+            except Exception:
+                pass
             self.conn = None
         if self._pool:
-            self._pool.closeall()
+            try:
+                self._pool.closeall()
+            except Exception:
+                pass
             self._pool = None
 
     def get_open_positions(self) -> List[Position]:
@@ -322,7 +333,7 @@ class Repository:
                     alert.severity.value,
                     escalation_level,
                     alert.message,
-                    json.dumps(alert.details),
+                    json.dumps(alert.details, default=str),
                     channel.value,
                     twilio_sid,
                 ))
