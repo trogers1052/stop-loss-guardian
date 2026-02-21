@@ -151,7 +151,11 @@ class StopLossGuardian:
 
         # Check each position
         for position in positions:
-            self._check_position(position)
+            try:
+                self._check_position(position)
+            except Exception as e:
+                logger.error(f"Error checking position {position.symbol}: {e}", exc_info=True)
+                # continue to next position
 
         logger.info(f"Checked {len(positions)} positions")
 

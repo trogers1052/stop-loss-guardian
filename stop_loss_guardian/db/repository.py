@@ -17,21 +17,31 @@ logger = logging.getLogger(__name__)
 class Repository:
     """Database access for stop loss tracking and alerts."""
 
+    # TODO: Migrate all methods to use self._pool.getconn() / self._pool.putconn(conn)
+    # pattern so connections are returned to the pool after each operation.
+    # Currently self.conn is used directly throughout; the pool is initialised
+    # here and self.conn is set from it so that existing code continues to work
+    # without a full rewrite.
+
     def __init__(self):
         self.conn = None
+        self._pool = None
 
     def connect(self):
-        """Establish database connection."""
+        """Establish database connection pool and acquire initial connection."""
         try:
-            self.conn = psycopg2.connect(
+            from psycopg2 import pool as pg_pool
+            connection_kwargs = dict(
                 host=settings.db_host,
                 port=settings.db_port,
                 user=settings.db_user,
                 password=settings.db_password,
                 dbname=settings.db_name,
             )
+            self._pool = pg_pool.SimpleConnectionPool(1, 3, **connection_kwargs)
+            self.conn = self._pool.getconn()
             self.conn.autocommit = False
-            logger.info("Connected to database")
+            logger.info("Connected to database (pool minconn=1, maxconn=3)")
         except Exception as e:
             logger.error(f"Failed to connect to database: {e}")
             raise
@@ -41,7 +51,11 @@ class Repository:
         try:
             if self.conn is None or self.conn.closed:
                 logger.info("Connection lost, reconnecting...")
-                self.connect()
+                if self._pool and self.conn:
+                    self._pool.putconn(self.conn)
+                self.conn = self._pool.getconn() if self._pool else None
+                if not self.conn:
+                    self.connect()
                 return
 
             # Test connection
@@ -50,17 +64,25 @@ class Repository:
         except Exception as e:
             logger.warning(f"Connection check failed: {e}, reconnecting...")
             try:
-                if self.conn:
-                    self.conn.close()
-            except:
+                if self._pool and self.conn:
+                    self._pool.putconn(self.conn)
+                    self.conn = None
+            except Exception:
                 pass
-            self.connect()
+            if self._pool:
+                self.conn = self._pool.getconn()
+                self.conn.autocommit = False
+            else:
+                self.connect()
 
     def close(self):
-        """Close database connection."""
-        if self.conn:
-            self.conn.close()
+        """Return connection to pool and close the pool."""
+        if self._pool and self.conn:
+            self._pool.putconn(self.conn)
             self.conn = None
+        if self._pool:
+            self._pool.closeall()
+            self._pool = None
 
     def get_open_positions(self) -> List[Position]:
         """Get all open positions from journal_positions table."""

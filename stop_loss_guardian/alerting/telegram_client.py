@@ -19,7 +19,7 @@ class TelegramClient:
         self.chat_id = settings.telegram_chat_id
         self.base_url = f"https://api.telegram.org/bot{self.bot_token}"
 
-    async def send_message(self, message: str, parse_mode: str = "HTML") -> bool:
+    async def _async_send_message(self, message: str, parse_mode: str = "HTML") -> bool:
         """Send a message via Telegram.
 
         Args:
