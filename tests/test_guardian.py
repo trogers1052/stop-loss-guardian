@@ -103,8 +103,10 @@ def _make_guardian() -> StopLossGuardian:
     """Instantiate StopLossGuardian without triggering __init__ I/O."""
     g = StopLossGuardian.__new__(StopLossGuardian)
     g._critical_drawdown_cooldowns = {}
+    g._earnings_alert_cooldowns = {}
     # Stub the Redis client so cooldown persistence calls are no-ops in tests.
     g.redis = unittest.mock.MagicMock()
+    g.redis.get_earnings_date.return_value = None
     return g
 
 
@@ -239,14 +241,19 @@ class TestMissingStopWithStalePriceGate(unittest.TestCase):
         self.tracking.updated_at = datetime.now(timezone.utc)
         self.tracking.alert_escalation_level = "none"
         self.tracking.id = 1
+        self.tracking.next_earnings_date = None
 
         self.guardian.repo = unittest.mock.MagicMock()
         self.guardian.repo.get_stop_loss_tracking.return_value = self.tracking
         self.guardian.repo.mark_alert_sent = unittest.mock.MagicMock()
 
         self.guardian.dispatcher = unittest.mock.MagicMock()
+        self.guardian.dispatcher.send_missing_stop_loss_alert.return_value = True
+        self.guardian.dispatcher.send_drawdown_alert.return_value = True
         self.guardian.position_sizer = unittest.mock.MagicMock()
         self.guardian.position_sizer.suggest_stop_loss.return_value = Decimal("90.00")
+        self.guardian.telegram = unittest.mock.MagicMock()
+        self.guardian.telegram.send_alert.return_value = True
 
     def _make_stale_no_stop(self):
         """Position WITHOUT a stop loss and stale price data (25 min old)."""

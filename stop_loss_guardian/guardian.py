@@ -141,8 +141,6 @@ class StopLossGuardian:
 
     def _check_all_positions(self):
         """Check all open positions for stop loss compliance."""
-        logger.debug("Checking all positions...")
-
         # Cleanup closed positions from tracking
         self.repo.cleanup_closed_positions()
 
@@ -153,6 +151,8 @@ class StopLossGuardian:
             logger.debug("No open positions to monitor")
             return
 
+        logger.info(f"Check cycle start: {len(open_positions)} positions to monitor")
+
         # Enrich with current prices from Redis
         positions = self._enrich_positions(open_positions)
 
@@ -160,14 +160,24 @@ class StopLossGuardian:
         self._sync_positions_to_tracking(positions)
 
         # Check each position
+        violations = 0
         for position in positions:
             try:
+                had_stop = position.has_stop_loss
                 self._check_position(position)
+                if not had_stop:
+                    violations += 1
             except Exception as e:
                 logger.error(f"Error checking position {position.symbol}: {e}", exc_info=True)
                 # continue to next position
 
-        logger.info(f"Checked {len(positions)} positions")
+        if violations > 0:
+            logger.info(
+                f"Check cycle complete: {len(positions)} positions, "
+                f"{violations} without stop loss"
+            )
+        else:
+            logger.info(f"Check cycle complete: {len(positions)} positions, all OK")
 
     def _enrich_positions(self, positions: List[Position]) -> List[Position]:
         """Enrich positions with current market data from Redis."""
