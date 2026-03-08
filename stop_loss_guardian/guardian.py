@@ -18,6 +18,7 @@ from .alerting.dispatcher import AlertDispatcher
 from .alerting.twilio_client import TwilioClient
 from .alerting.telegram_client import TelegramClient
 from .position_sizer import PositionSizer
+from .portfolio_monitor import PortfolioMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class StopLossGuardian:
         self.telegram = TelegramClient()
         self.dispatcher: Optional[AlertDispatcher] = None
         self.position_sizer = PositionSizer()
+        self.portfolio_monitor: Optional[PortfolioMonitor] = None
         self._running = False
         # In-memory cooldowns for critical drawdown alerts (symbol → last alert time).
         # Resets on restart — worst case is one extra alert, which is acceptable.
@@ -73,6 +75,14 @@ class StopLossGuardian:
             twilio_client=self.twilio,
             telegram_client=self.telegram,
         )
+
+        # Portfolio-level risk monitor
+        if settings.portfolio_monitor_enabled:
+            self.portfolio_monitor = PortfolioMonitor(
+                redis_client=self.redis,
+                telegram_client=self.telegram,
+            )
+            logger.info("Portfolio monitor enabled")
 
         self._running = True
         self._run_monitoring_loop()
@@ -178,6 +188,22 @@ class StopLossGuardian:
             )
         else:
             logger.info(f"Check cycle complete: {len(positions)} positions, all OK")
+
+        # Portfolio-level risk check (runs after all per-position checks)
+        if self.portfolio_monitor is not None:
+            try:
+                state = self.portfolio_monitor.check(positions)
+                if state and state.halted:
+                    logger.warning(
+                        f"Portfolio HALTED: {state.halt_reason} "
+                        f"(heat={state.actual_portfolio_heat:.1%}, "
+                        f"pnl={state.daily_pnl_pct:.1%}, "
+                        f"stops={state.stops_hit_today})"
+                    )
+            except Exception as e:
+                logger.error(
+                    f"Portfolio monitor error: {e}", exc_info=True
+                )
 
     def _enrich_positions(self, positions: List[Position]) -> List[Position]:
         """Enrich positions with current market data from Redis."""

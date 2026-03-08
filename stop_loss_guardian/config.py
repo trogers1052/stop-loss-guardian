@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     market_hours_only: bool = Field(default=True, alias="MARKET_HOURS_ONLY")
     price_staleness_minutes: int = Field(default=15, alias="PRICE_STALENESS_MINUTES")
 
+    # Portfolio-level risk monitoring
+    portfolio_monitor_enabled: bool = Field(default=True, alias="PORTFOLIO_MONITOR_ENABLED")
+    portfolio_max_stops_per_day: int = Field(default=3, alias="PORTFOLIO_MAX_STOPS_PER_DAY")
+    portfolio_daily_loss_halt_pct: float = Field(default=0.06, alias="PORTFOLIO_DAILY_LOSS_HALT_PCT")
+    portfolio_heat_warn_pct: float = Field(default=0.08, alias="PORTFOLIO_HEAT_WARN_PCT")
+    portfolio_heat_halt_pct: float = Field(default=0.12, alias="PORTFOLIO_HEAT_HALT_PCT")
+
     # Logging
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
