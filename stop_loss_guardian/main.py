@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from .config import settings
 from .guardian import StopLossGuardian
+from .metrics import start_metrics_server
 
 # Configure logging
 logging.basicConfig(
@@ -36,11 +37,16 @@ guardian: StopLossGuardian = None
 
 
 def signal_handler(signum, frame):
-    """Handle shutdown signals gracefully."""
+    """Handle shutdown signals gracefully.
+
+    Sets the stop flag and event so the monitoring loop exits promptly.
+    Full resource cleanup happens in the finally block of main().
+    """
     logger.info(f"Received signal {signum}, shutting down...")
     if guardian:
         guardian.stop()
-    sys.exit(0)
+    else:
+        sys.exit(0)  # not initialized yet, nothing to clean up
 
 
 def _start_health_server() -> None:
@@ -71,6 +77,7 @@ def main():
     global guardian
 
     _start_health_server()
+    start_metrics_server()
 
     logger.info("=" * 60)
     logger.info("STOP LOSS GUARDIAN")

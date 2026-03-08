@@ -5,6 +5,7 @@ This service monitors all open positions and SCREAMS if any position lacks a sto
 """
 
 import logging
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -41,6 +42,7 @@ class StopLossGuardian:
         self.position_sizer = PositionSizer()
         self.portfolio_monitor: Optional[PortfolioMonitor] = None
         self._running = False
+        self._stop_event = threading.Event()
         # In-memory cooldowns for critical drawdown alerts (symbol → last alert time).
         # Resets on restart — worst case is one extra alert, which is acceptable.
         self._critical_drawdown_cooldowns: Dict[str, datetime] = {}
@@ -97,12 +99,16 @@ class StopLossGuardian:
             return  # already stopped
         logger.info("Stopping Stop Loss Guardian...")
         self._running = False
+        self._stop_event.set()
         self.repo.close()
         self.redis.close()
         logger.info("Stop Loss Guardian shutdown complete")
 
     # Number of consecutive monitoring-loop errors before sending a degraded alert.
-    _ERROR_ALERT_THRESHOLD = 5
+    # At 60s check interval, threshold=2 means max 120s of monitoring blindness.
+    # Lowered from 5 (300s) per portfolio risk audit — 5 minutes unmonitored is
+    # too long for a small account where a single position can be 15%+ of capital.
+    _ERROR_ALERT_THRESHOLD = 2
 
     def _run_monitoring_loop(self):
         """Main monitoring loop."""
@@ -146,8 +152,9 @@ class StopLossGuardian:
                     except Exception as alert_exc:
                         logger.error(f"Failed to send degraded-service alert: {alert_exc}")
 
-            # Sleep until next check
-            time.sleep(settings.check_interval_seconds)
+            # Wait until next check (interruptible by stop())
+            if self._stop_event.wait(timeout=settings.check_interval_seconds):
+                break  # shutdown requested
 
     def _check_all_positions(self):
         """Check all open positions for stop loss compliance."""
