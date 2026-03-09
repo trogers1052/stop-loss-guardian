@@ -20,6 +20,7 @@ from .alerting.twilio_client import TwilioClient
 from .alerting.telegram_client import TelegramClient
 from .position_sizer import PositionSizer
 from .portfolio_monitor import PortfolioMonitor
+from . import metrics as m
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,7 @@ class StopLossGuardian:
         consecutive_errors = 0
 
         while self._running:
+            cycle_start = time.monotonic()
             try:
                 # Ensure database connection is healthy
                 self.repo.ensure_connected()
@@ -127,9 +129,13 @@ class StopLossGuardian:
                         f"Monitoring loop recovered after {consecutive_errors} consecutive error(s)"
                     )
                 consecutive_errors = 0
+                if m.CONSECUTIVE_ERRORS is not None:
+                    m.CONSECUTIVE_ERRORS.set(0)
 
             except Exception as e:
                 consecutive_errors += 1
+                if m.CONSECUTIVE_ERRORS is not None:
+                    m.CONSECUTIVE_ERRORS.set(consecutive_errors)
                 logger.error(
                     f"Error in monitoring loop (consecutive: {consecutive_errors}): {e}",
                     exc_info=True,
@@ -151,6 +157,13 @@ class StopLossGuardian:
                         )
                     except Exception as alert_exc:
                         logger.error(f"Failed to send degraded-service alert: {alert_exc}")
+            finally:
+                # Record cycle metrics regardless of success/failure
+                cycle_duration = time.monotonic() - cycle_start
+                if m.CHECK_CYCLES is not None:
+                    m.CHECK_CYCLES.inc()
+                if m.CHECK_CYCLE_DURATION is not None:
+                    m.CHECK_CYCLE_DURATION.observe(cycle_duration)
 
             # Wait until next check (interruptible by stop())
             if self._stop_event.wait(timeout=settings.check_interval_seconds):
@@ -166,6 +179,14 @@ class StopLossGuardian:
 
         if not open_positions:
             logger.debug("No open positions to monitor")
+            if m.MISSING_STOPS is not None:
+                m.MISSING_STOPS.set(0)
+            if m.PORTFOLIO_HEAT is not None:
+                m.PORTFOLIO_HEAT.set(0)
+            if m.DAILY_PNL is not None:
+                m.DAILY_PNL.set(0)
+            if m.PORTFOLIO_HALTED is not None:
+                m.PORTFOLIO_HALTED.set(0)
             return
 
         logger.info(f"Check cycle start: {len(open_positions)} positions to monitor")
@@ -175,6 +196,10 @@ class StopLossGuardian:
 
         # Sync to stop_loss_tracking table
         self._sync_positions_to_tracking(positions)
+
+        # Track positions checked
+        if m.POSITIONS_CHECKED is not None:
+            m.POSITIONS_CHECKED.inc(len(positions))
 
         # Check each position
         violations = 0
@@ -188,6 +213,10 @@ class StopLossGuardian:
                 logger.error(f"Error checking position {position.symbol}: {e}", exc_info=True)
                 # continue to next position
 
+        # Update missing stops gauge
+        if m.MISSING_STOPS is not None:
+            m.MISSING_STOPS.set(violations)
+
         if violations > 0:
             logger.info(
                 f"Check cycle complete: {len(positions)} positions, "
@@ -200,13 +229,21 @@ class StopLossGuardian:
         if self.portfolio_monitor is not None:
             try:
                 state = self.portfolio_monitor.check(positions)
-                if state and state.halted:
-                    logger.warning(
-                        f"Portfolio HALTED: {state.halt_reason} "
-                        f"(heat={state.actual_portfolio_heat:.1%}, "
-                        f"pnl={state.daily_pnl_pct:.1%}, "
-                        f"stops={state.stops_hit_today})"
-                    )
+                if state:
+                    # Update portfolio-level gauges
+                    if m.PORTFOLIO_HEAT is not None:
+                        m.PORTFOLIO_HEAT.set(state.actual_portfolio_heat * 100)
+                    if m.DAILY_PNL is not None:
+                        m.DAILY_PNL.set(state.daily_pnl_pct * 100)
+                    if m.PORTFOLIO_HALTED is not None:
+                        m.PORTFOLIO_HALTED.set(1 if state.halted else 0)
+                    if state.halted:
+                        logger.warning(
+                            f"Portfolio HALTED: {state.halt_reason} "
+                            f"(heat={state.actual_portfolio_heat:.1%}, "
+                            f"pnl={state.daily_pnl_pct:.1%}, "
+                            f"stops={state.stops_hit_today})"
+                        )
             except Exception as e:
                 logger.error(
                     f"Portfolio monitor error: {e}", exc_info=True
@@ -375,11 +412,17 @@ class StopLossGuardian:
         sent = self.telegram.send_alert(message)
         if sent:
             self._earnings_alert_cooldowns[position.symbol] = datetime.now(timezone.utc)
+            if m.EARNINGS_ALERTS is not None:
+                m.EARNINGS_ALERTS.inc()
+            if m.ALERTS_SENT is not None:
+                m.ALERTS_SENT.labels(channel="telegram", status="success").inc()
             logger.warning(
                 f"Earnings proximity alert sent for {position.symbol}: "
                 f"{days_until} day(s) until {earnings_date}"
             )
         else:
+            if m.ALERTS_SENT is not None:
+                m.ALERTS_SENT.labels(channel="telegram", status="failed").inc()
             logger.error(f"Failed to send earnings proximity alert for {position.symbol}")
 
     def _handle_missing_stop_loss(
@@ -433,6 +476,10 @@ class StopLossGuardian:
         # Only mark alert sent if dispatch actually succeeded — otherwise the
         # escalation counter advances without the trader receiving the alert.
         if not alert_sent:
+            # Track failed alert
+            channel_name = "telegram" if escalation_level == 0 else "sms" if escalation_level == 1 else "phone_call"
+            if m.ALERTS_SENT is not None:
+                m.ALERTS_SENT.labels(channel=channel_name, status="failed").inc()
             logger.error(
                 f"Alert dispatch FAILED for {position.symbol} — "
                 f"NOT marking as sent so escalation retries next cycle"
@@ -441,6 +488,8 @@ class StopLossGuardian:
 
         # Update tracking
         channel = "telegram" if escalation_level == 0 else "sms" if escalation_level == 1 else "phone_call"
+        if m.ALERTS_SENT is not None:
+            m.ALERTS_SENT.labels(channel=channel, status="success").inc()
         self.repo.mark_alert_sent(position.symbol, channel)
 
         logger.warning(
@@ -463,6 +512,9 @@ class StopLossGuardian:
             stop_loss_tracking_id=tracking.id,
         )
 
+        if m.DRAWDOWN_WARNINGS is not None:
+            m.DRAWDOWN_WARNINGS.labels(severity="critical_10pct").inc()
+
         self._set_drawdown_cooldown(position.symbol)
 
         logger.critical(
@@ -473,6 +525,8 @@ class StopLossGuardian:
         """Handle a position with warning drawdown (> 5%)."""
         # Log but don't necessarily alert for warnings if stop is set
         if position.has_stop_loss:
+            if m.DRAWDOWN_WARNINGS is not None:
+                m.DRAWDOWN_WARNINGS.labels(severity="warning_5pct").inc()
             logger.warning(
                 f"Drawdown warning: {position.symbol} down {abs(position.current_drawdown_pct):.1f}% "
                 f"(stop at ${position.stop_loss_price})"
@@ -497,7 +551,10 @@ class StopLossGuardian:
             f"Check that the stop order executed on Robinhood."
         )
 
-        self.telegram.send_alert(message)
+        sent = self.telegram.send_alert(message)
+        if m.ALERTS_SENT is not None:
+            status = "success" if sent else "failed"
+            m.ALERTS_SENT.labels(channel="telegram", status=status).inc()
 
     def _should_send_alert(self, tracking) -> bool:
         """Determine if we should send an alert based on timing and escalation."""

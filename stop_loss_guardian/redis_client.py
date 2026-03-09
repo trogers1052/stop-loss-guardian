@@ -10,6 +10,7 @@ import redis
 
 from .config import settings
 from .models import AccountState
+from . import metrics as m
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,8 @@ class RedisClient:
 
             return positions
         except Exception as e:
+            if m.REDIS_ERRORS is not None:
+                m.REDIS_ERRORS.inc()
             logger.error(f"Failed to get positions from Redis: {e}")
             return {}
 
@@ -79,6 +82,8 @@ class RedisClient:
                 return None
             return json.loads(data_str)
         except Exception as e:
+            if m.REDIS_ERRORS is not None:
+                m.REDIS_ERRORS.inc()
             logger.error(f"Failed to get position for {symbol}: {e}")
             return None
 
@@ -118,6 +123,8 @@ class RedisClient:
                 updated_at=datetime.fromisoformat(data.get("updated_at", datetime.now().isoformat())),
             )
         except Exception as e:
+            if m.REDIS_ERRORS is not None:
+                m.REDIS_ERRORS.inc()
             logger.error(f"Failed to get account state: {e}")
             return None
 
@@ -184,6 +191,8 @@ class RedisClient:
                 return None
             return json.loads(data_str)
         except Exception as e:
+            if m.REDIS_ERRORS is not None:
+                m.REDIS_ERRORS.inc()
             logger.error(f"Failed to get stop order for {symbol}: {e}")
             return None
 
@@ -202,6 +211,8 @@ class RedisClient:
         try:
             raw = self.client.hgetall(self._COOLDOWN_KEY)
         except Exception as e:
+            if m.REDIS_ERRORS is not None:
+                m.REDIS_ERRORS.inc()
             logger.warning(f"Failed to read drawdown cooldowns from Redis: {e}")
             return {}
 
@@ -221,6 +232,8 @@ class RedisClient:
         try:
             self.client.hset(self._COOLDOWN_KEY, symbol, timestamp.isoformat())
         except Exception as e:
+            if m.REDIS_ERRORS is not None:
+                m.REDIS_ERRORS.inc()
             logger.warning(f"Failed to persist drawdown cooldown for {symbol}: {e}")
 
     def get_earnings_date(self, symbol: str) -> Optional[str]:
@@ -236,6 +249,8 @@ class RedisClient:
             data = json.loads(data_str)
             return data.get("next_earnings_date")
         except Exception as e:
+            if m.REDIS_ERRORS is not None:
+                m.REDIS_ERRORS.inc()
             logger.warning(f"Failed to get earnings date for {symbol}: {e}")
             return None
 
@@ -258,5 +273,7 @@ class RedisClient:
 
             return orders
         except Exception as e:
+            if m.REDIS_ERRORS is not None:
+                m.REDIS_ERRORS.inc()
             logger.error(f"Failed to get stop orders from Redis: {e}")
             return {}

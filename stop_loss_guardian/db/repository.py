@@ -10,6 +10,7 @@ from psycopg2.extras import RealDictCursor
 
 from ..config import settings
 from ..models import Position, StopLossRecord, Alert, AlertType, Severity, AlertChannel
+from .. import metrics as m
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,8 @@ class Repository:
             return positions
         except Exception as e:
             self.conn.rollback()
+            if m.DB_ERRORS is not None:
+                m.DB_ERRORS.inc()
             logger.error(f"Failed to get open positions: {e}")
             raise
 
@@ -166,6 +169,8 @@ class Repository:
             )
         except Exception as e:
             self.conn.rollback()
+            if m.DB_ERRORS is not None:
+                m.DB_ERRORS.inc()
             logger.error(f"Failed to get stop loss tracking for {symbol}: {e}")
             raise
 
@@ -218,6 +223,8 @@ class Repository:
                 return result[0] if result else 0
         except Exception as e:
             self.conn.rollback()
+            if m.DB_ERRORS is not None:
+                m.DB_ERRORS.inc()
             logger.error(f"Failed to upsert stop loss tracking: {e}")
             raise
 
@@ -254,6 +261,8 @@ class Repository:
                 logger.info(f"Updated stop loss for {symbol}: ${stop_loss_price}")
         except Exception as e:
             self.conn.rollback()
+            if m.DB_ERRORS is not None:
+                m.DB_ERRORS.inc()
             logger.error(f"Failed to update stop loss for {symbol}: {e}")
             raise
 
@@ -279,6 +288,8 @@ class Repository:
                 self.conn.commit()
         except Exception as e:
             self.conn.rollback()
+            if m.DB_ERRORS is not None:
+                m.DB_ERRORS.inc()
             logger.error(f"Failed to mark alert sent for {symbol}: {e}")
             raise
 
@@ -300,6 +311,8 @@ class Repository:
                 logger.info(f"Acknowledged alert for {symbol}")
         except Exception as e:
             self.conn.rollback()
+            if m.DB_ERRORS is not None:
+                m.DB_ERRORS.inc()
             logger.error(f"Failed to acknowledge alert for {symbol}: {e}")
             raise
 
@@ -342,6 +355,8 @@ class Repository:
                 return result[0] if result else 0
         except Exception as e:
             self.conn.rollback()
+            if m.DB_ERRORS is not None:
+                m.DB_ERRORS.inc()
             logger.error(f"Failed to log urgent alert: {e}")
             raise
 
@@ -371,6 +386,8 @@ class Repository:
                 return cur.fetchall()
         except Exception as e:
             self.conn.rollback()
+            if m.DB_ERRORS is not None:
+                m.DB_ERRORS.inc()
             logger.error(f"Failed to get positions without stop loss: {e}")
             raise
 
@@ -391,6 +408,8 @@ class Repository:
                 return cur.fetchall()
         except Exception as e:
             self.conn.rollback()
+            if m.DB_ERRORS is not None:
+                m.DB_ERRORS.inc()
             logger.error(f"Failed to get positions with critical drawdown: {e}")
             raise
 
@@ -456,4 +475,6 @@ class Repository:
                     logger.info(f"Cleaned up {tracking_deleted} closed positions from tracking")
         except Exception as e:
             self.conn.rollback()
+            if m.DB_ERRORS is not None:
+                m.DB_ERRORS.inc()
             logger.error(f"Failed to cleanup closed positions: {e}")
