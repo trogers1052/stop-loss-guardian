@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     redis_host: str = Field(default="redis", alias="REDIS_HOST")
     redis_port: int = Field(default=6379, alias="REDIS_PORT")
     redis_db: int = Field(default=0, alias="REDIS_DB")
+    redis_password: Optional[str] = Field(default=None, alias="REDIS_PASSWORD")
     redis_positions_key: str = Field(default="robinhood:positions", alias="REDIS_POSITIONS_KEY")
     redis_buying_power_key: str = Field(default="robinhood:buying_power", alias="REDIS_BUYING_POWER_KEY")
 
