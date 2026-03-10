@@ -21,4 +21,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY stop_loss_guardian/ ./stop_loss_guardian/
 
 # Run the guardian
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=15s \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"
+
 CMD ["python", "-m", "stop_loss_guardian.main"]
