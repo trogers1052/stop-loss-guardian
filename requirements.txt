@@ -11,7 +11,7 @@ psycopg2-binary==2.9.11
 redis==7.3.0
 
 # Twilio (SMS + Phone calls)
-twilio==9.10.2
+twilio==9.10.3
 
 # HTTP client (for Telegram)
 httpx==0.28.1
