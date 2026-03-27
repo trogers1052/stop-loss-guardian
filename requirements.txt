@@ -8,7 +8,7 @@ pydantic-settings==2.13.1
 psycopg2-binary==2.9.11
 
 # Redis
-redis==7.3.0
+redis==7.4.0
 
 # Twilio (SMS + Phone calls)
 twilio==9.10.2
