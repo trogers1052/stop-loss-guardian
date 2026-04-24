@@ -1,7 +1,7 @@
 # Stop Loss Guardian Dependencies (pinned to production versions)
 
 # Core
-pydantic==2.12.5
+pydantic==2.13.3
 pydantic-settings==2.13.1
 
 # Database
