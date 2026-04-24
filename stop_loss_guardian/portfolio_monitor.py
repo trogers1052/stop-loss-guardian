@@ -122,6 +122,7 @@ class PortfolioMonitor:
         self._stops_hit_today: List[str] = []
         self._last_date: str = ""
         self._halt_alert_sent_today: bool = False
+        self._stops_alerted_count: int = 0
 
     def check(self, positions: List[Position]) -> Optional[PortfolioDailyState]:
         """Run all portfolio-level checks.
@@ -139,6 +140,7 @@ class PortfolioMonitor:
         if today != self._last_date:
             self._stops_hit_today = []
             self._halt_alert_sent_today = False
+            self._stops_alerted_count = 0
             self._last_date = today
 
         current_symbols = {p.symbol for p in positions}
@@ -197,18 +199,37 @@ class PortfolioMonitor:
     # ------------------------------------------------------------------
 
     def _detect_hit_stops(self, current_symbols: set) -> None:
-        """Detect positions that disappeared since last scan (stop hit)."""
+        """Detect positions that disappeared since last scan.
+
+        Only counts as a stop hit if the symbol had an active stop order
+        in the previous cycle.  Manual sells (no stop order) are logged
+        but not counted toward the daily stops-hit total.
+        """
         if not self._previous_symbols:
             # First scan — no comparison possible
             return
 
         disappeared = self._previous_symbols - current_symbols
+        if not disappeared:
+            return
+
+        # Check which disappeared symbols actually had stop orders
+        stop_orders = self._load_all_stop_orders()
+
         for symbol in disappeared:
-            if symbol not in self._stops_hit_today:
+            if symbol in self._stops_hit_today:
+                continue
+
+            if symbol in stop_orders:
                 self._stops_hit_today.append(symbol)
                 logger.warning(
-                    f"Portfolio monitor: {symbol} position closed "
+                    f"Portfolio monitor: {symbol} stop hit "
                     f"(stop #{len(self._stops_hit_today)} today)"
+                )
+            else:
+                logger.info(
+                    f"Portfolio monitor: {symbol} position closed "
+                    f"(no stop order — likely manual sell, not counted)"
                 )
 
     # ------------------------------------------------------------------
@@ -431,8 +452,8 @@ class PortfolioMonitor:
         stops = state.stops_hit_today
         max_stops = settings.portfolio_max_stops_per_day
 
-        # Individual stop hit notification
-        if stops > 0 and len(state.stops_hit_symbols) > 0:
+        # Individual stop hit notification (only alert on new stops)
+        if stops > self._stops_alerted_count and len(state.stops_hit_symbols) > 0:
             latest_symbol = state.stops_hit_symbols[-1]
 
             if stops == 1:
@@ -449,6 +470,8 @@ class PortfolioMonitor:
                     f"Review remaining positions.",
                     severity="warning",
                 )
+
+            self._stops_alerted_count = stops
 
         # Portfolio halt alert (send once per day)
         if state.halted and not self._halt_alert_sent_today:

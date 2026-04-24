@@ -88,27 +88,57 @@ class TestStopDetection:
         monitor._detect_hit_stops({p.symbol for p in positions})
         assert monitor._stops_hit_today == []
 
-    def test_detect_disappeared_position(self, monitor):
-        """Position disappearing between scans = stop hit."""
+    def test_detect_disappeared_position_with_stop_order(self, monitor, mock_redis_client):
+        """Position disappearing with a stop order = stop hit."""
+        mock_redis_client.get_all_stop_orders.return_value = {
+            "CCJ": {"stop_price": "47.00"},
+        }
         monitor._previous_symbols = {"AAPL", "CCJ"}
         current = {"AAPL"}
         monitor._detect_hit_stops(current)
         assert "CCJ" in monitor._stops_hit_today
 
-    def test_no_duplicate_stops(self, monitor):
+    def test_disappeared_without_stop_order_not_counted(self, monitor, mock_redis_client):
+        """Position disappearing without a stop order = manual sell, not counted."""
+        mock_redis_client.get_all_stop_orders.return_value = {}
+        monitor._previous_symbols = {"AAPL", "CCJ"}
+        current = {"AAPL"}
+        monitor._detect_hit_stops(current)
+        assert monitor._stops_hit_today == []
+
+    def test_no_duplicate_stops(self, monitor, mock_redis_client):
         """Same symbol disappearing again doesn't double-count."""
+        mock_redis_client.get_all_stop_orders.return_value = {
+            "CCJ": {"stop_price": "47.00"},
+        }
         monitor._previous_symbols = {"AAPL"}
         monitor._stops_hit_today = ["CCJ"]
         monitor._detect_hit_stops({"AAPL"})
         assert monitor._stops_hit_today == ["CCJ"]
 
-    def test_multiple_stops_same_scan(self, monitor):
-        """Two positions disappearing in one scan."""
+    def test_multiple_stops_same_scan(self, monitor, mock_redis_client):
+        """Two positions disappearing with stop orders in one scan."""
+        mock_redis_client.get_all_stop_orders.return_value = {
+            "CCJ": {"stop_price": "47.00"},
+            "URNM": {"stop_price": "28.00"},
+        }
         monitor._previous_symbols = {"AAPL", "CCJ", "URNM"}
         monitor._detect_hit_stops({"AAPL"})
         assert "CCJ" in monitor._stops_hit_today
         assert "URNM" in monitor._stops_hit_today
         assert len(monitor._stops_hit_today) == 2
+
+    def test_mixed_stop_and_manual_sell(self, monitor, mock_redis_client):
+        """One position had a stop order, one didn't — only stop counted."""
+        mock_redis_client.get_all_stop_orders.return_value = {
+            "CCJ": {"stop_price": "47.00"},
+            # RTX has no stop order — manual sell
+        }
+        monitor._previous_symbols = {"AAPL", "CCJ", "RTX"}
+        monitor._detect_hit_stops({"AAPL"})
+        assert "CCJ" in monitor._stops_hit_today
+        assert "RTX" not in monitor._stops_hit_today
+        assert len(monitor._stops_hit_today) == 1
 
 
 # ------------------------------------------------------------------
@@ -356,6 +386,27 @@ class TestAlerts:
             if "CIRCUIT BREAKER" in str(c)
         ]
         assert len(halt_calls) == 0
+
+    def test_stop_alert_sent_once(self, monitor, mock_telegram_client):
+        """Stop hit alert should only fire once, not every cycle."""
+        state = PortfolioDailyState(
+            trade_date="2026-03-07",
+            stops_hit_today=2,
+            stops_hit_symbols=["RTX", "COP"],
+            daily_pnl_pct=0.0,
+        )
+        monitor._check_thresholds_and_alert(state)
+        assert monitor._stops_alerted_count == 2
+        first_call_count = mock_telegram_client.send_alert.call_count
+
+        # Second call with same state should NOT re-alert
+        mock_telegram_client.send_alert.reset_mock()
+        monitor._check_thresholds_and_alert(state)
+        stop_calls = [
+            c for c in mock_telegram_client.send_alert.call_args_list
+            if "stops hit" in str(c)
+        ]
+        assert len(stop_calls) == 0
 
     def test_gap_alert(self, monitor, mock_telegram_client):
         state = PortfolioDailyState(
