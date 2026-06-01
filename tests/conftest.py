@@ -73,6 +73,7 @@ class FakeSettings:
     redis_host = "localhost"
     redis_port = 6379
     redis_db = 0
+    redis_password = None
     redis_positions_key = "robinhood:positions"
     redis_buying_power_key = "robinhood:buying_power"
     # Alerting
