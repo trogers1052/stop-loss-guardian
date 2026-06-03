@@ -2,8 +2,10 @@
 
 The connection lifecycle (client construction, reconnect, retry plumbing,
 ``redis_url``) is inherited from :class:`trading_commons.redisx.RedisBase`.
-The retry helper is configured for no-sleep, single-retry parity
-(``backoff_base=0, max_retries=1``) so it never blocks the monitoring loop.
+The retry helper is configured for the no-retry path
+(``max_retries=0``) so it never blocks the monitoring loop. (RedisClient
+overrides ``connect`` and handles every Redis call's errors inline, so the
+inherited ``_with_retry``/``reconnect`` plumbing is not exercised here.)
 
 The data-access methods (positions, account state, stop orders, drawdown
 cooldowns, and the earnings reader) keep the guardian's historical contract:
@@ -43,9 +45,8 @@ class RedisClient(RedisBase):
             port=settings.redis_port,
             db=settings.redis_db,
             password=settings.redis_password or None,
-            # No-sleep, single-retry parity for the retry plumbing.
-            max_retries=1,
-            backoff_base=0,
+            # No-retry path (inherited _with_retry/reconnect is unused here).
+            max_retries=0,
         )
         self.client: Optional[redis.Redis] = None
 

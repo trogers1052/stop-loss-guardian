@@ -1,7 +1,7 @@
 # Stop Loss Guardian Dependencies (pinned to production versions)
 
 # Shared platform infrastructure (config, metrics, redisx, telegram)
-trading-py-commons @ git+https://github.com/trogers1052/trading-py-commons.git@v0.1.0
+trading-py-commons @ git+https://github.com/trogers1052/trading-py-commons.git@v0.2.0
 
 # Core
 pydantic==2.12.5
