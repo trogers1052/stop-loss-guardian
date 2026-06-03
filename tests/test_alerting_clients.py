@@ -20,10 +20,14 @@ from stop_loss_guardian.alerting.twilio_client import TwilioClient
 
 def _make_telegram(enabled=True):
     tg = TelegramClient.__new__(TelegramClient)
-    tg.enabled = enabled
-    tg.bot_token = "BOT"
-    tg.chat_id = "CHAT"
+    # ``enabled`` is a derived property (bot_token and chat_id). To produce a
+    # disabled client, clear the credentials; to enable it, supply both.
+    tg.bot_token = "BOT" if enabled else None
+    tg.chat_id = "CHAT" if enabled else None
     tg.base_url = "https://api.telegram.org/botBOT"
+    tg.max_retries = TelegramClient._MAX_RETRIES
+    tg.timeout = 10.0
+    tg.backoff_base = 1.0
     return tg
 
 

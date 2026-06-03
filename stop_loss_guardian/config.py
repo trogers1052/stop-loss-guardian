@@ -1,68 +1,93 @@
-"""Configuration for Stop Loss Guardian service."""
+"""Configuration for Stop Loss Guardian service.
+
+Builds on :class:`trading_commons.config.BaseServiceSettings`, which supplies
+the shared Redis / Telegram / Kafka / logging blocks, the ``redis_url``
+property, Docker-secrets support (``/run/secrets/<name>`` wins over the
+environment for any field listed in ``SECRET_FIELDS``), and the
+env > YAML > defaults precedence helper.
+
+This subclass adds the guardian-specific fields (database, Twilio escalation,
+risk parameters, alert thresholds, monitoring, portfolio-level risk) and
+extends ``SECRET_FIELDS`` with the guardian's sensitive credentials.
+"""
 
 from decimal import Decimal
-from pydantic_settings import BaseSettings
+from typing import ClassVar, Optional
+
 from pydantic import Field
-from typing import Optional
+from pydantic_settings import SettingsConfigDict
+
+from trading_commons.config import BaseServiceSettings
 
 
-class Settings(BaseSettings):
+class Settings(BaseServiceSettings):
     """Stop Loss Guardian configuration."""
 
-    # Database - Trading Platform (PostgreSQL)
-    db_host: str = Field(default="postgres", alias="DB_HOST")
-    db_port: int = Field(default=5432, alias="DB_PORT")
-    db_user: str = Field(default="trader", alias="DB_USER")
-    db_password: str = Field(default="", alias="DB_PASSWORD")
-    db_name: str = Field(default="trading_platform", alias="DB_NAME")
+    # Env vars are matched case-insensitively to field names (e.g. DB_HOST ->
+    # db_host), so the historical UPPERCASE env names keep working without
+    # per-field aliases.
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
 
-    # Redis - Position data from Robinhood sync
-    redis_host: str = Field(default="redis", alias="REDIS_HOST")
-    redis_port: int = Field(default=6379, alias="REDIS_PORT")
-    redis_db: int = Field(default=0, alias="REDIS_DB")
-    redis_password: Optional[str] = Field(default=None, alias="REDIS_PASSWORD")
-    redis_positions_key: str = Field(default="robinhood:positions", alias="REDIS_POSITIONS_KEY")
-    redis_buying_power_key: str = Field(default="robinhood:buying_power", alias="REDIS_BUYING_POWER_KEY")
+    # Database - Trading Platform (PostgreSQL)
+    db_host: str = Field(default="postgres")
+    db_port: int = Field(default=5432)
+    db_user: str = Field(default="trader")
+    db_password: str = Field(default="")
+    db_name: str = Field(default="trading_platform")
+
+    # Redis position-data keys (host/port/db/password come from the base).
+    redis_host: str = Field(default="redis")
+    redis_positions_key: str = Field(default="robinhood:positions")
+    redis_buying_power_key: str = Field(default="robinhood:buying_power")
 
     # Twilio - Urgent alerts (SMS + Phone)
-    twilio_account_sid: Optional[str] = Field(default=None, alias="TWILIO_ACCOUNT_SID")
-    twilio_auth_token: Optional[str] = Field(default=None, alias="TWILIO_AUTH_TOKEN")
-    twilio_phone_number: Optional[str] = Field(default=None, alias="TWILIO_PHONE_NUMBER")
-    alert_phone_number: str = Field(default="", alias="ALERT_PHONE_NUMBER")  # Your phone number
-
-    # Telegram - Routine alerts (fallback)
-    telegram_bot_token: Optional[str] = Field(default=None, alias="TELEGRAM_BOT_TOKEN")
-    telegram_chat_id: Optional[str] = Field(default=None, alias="TELEGRAM_CHAT_ID")
+    twilio_account_sid: Optional[str] = Field(default=None)
+    twilio_auth_token: Optional[str] = Field(default=None)
+    twilio_phone_number: Optional[str] = Field(default=None)
+    alert_phone_number: str = Field(default="")  # Your phone number
 
     # Risk Parameters
-    max_risk_per_trade_pct: Decimal = Field(default=Decimal("2.0"), alias="MAX_RISK_PER_TRADE_PCT")
-    max_position_pct: Decimal = Field(default=Decimal("20.0"), alias="MAX_POSITION_PCT")
-    default_stop_loss_pct: Decimal = Field(default=Decimal("10.0"), alias="DEFAULT_STOP_LOSS_PCT")
+    max_risk_per_trade_pct: Decimal = Field(default=Decimal("2.0"))
+    max_position_pct: Decimal = Field(default=Decimal("20.0"))
+    default_stop_loss_pct: Decimal = Field(default=Decimal("10.0"))
 
     # Alert Thresholds
-    drawdown_warning_pct: Decimal = Field(default=Decimal("5.0"), alias="DRAWDOWN_WARNING_PCT")
-    drawdown_critical_pct: Decimal = Field(default=Decimal("10.0"), alias="DRAWDOWN_CRITICAL_PCT")
-    earnings_warning_days: int = Field(default=5, alias="EARNINGS_WARNING_DAYS")
+    drawdown_warning_pct: Decimal = Field(default=Decimal("5.0"))
+    drawdown_critical_pct: Decimal = Field(default=Decimal("10.0"))
+    earnings_warning_days: int = Field(default=5)
 
     # Alert Escalation
-    escalation_interval_minutes: int = Field(default=60, alias="ESCALATION_INTERVAL_MINUTES")
-    max_telegram_alerts: int = Field(default=2, alias="MAX_TELEGRAM_ALERTS")  # After this, escalate to SMS
-    max_sms_alerts: int = Field(default=2, alias="MAX_SMS_ALERTS")  # After this, escalate to phone call
+    escalation_interval_minutes: int = Field(default=60)
+    max_telegram_alerts: int = Field(default=2)  # After this, escalate to SMS
+    max_sms_alerts: int = Field(default=2)  # After this, escalate to phone call
 
     # Monitoring
-    check_interval_seconds: int = Field(default=60, alias="CHECK_INTERVAL_SECONDS")
-    market_hours_only: bool = Field(default=True, alias="MARKET_HOURS_ONLY")
-    price_staleness_minutes: int = Field(default=15, alias="PRICE_STALENESS_MINUTES")
+    check_interval_seconds: int = Field(default=60)
+    market_hours_only: bool = Field(default=True)
+    price_staleness_minutes: int = Field(default=15)
 
     # Portfolio-level risk monitoring
-    portfolio_monitor_enabled: bool = Field(default=True, alias="PORTFOLIO_MONITOR_ENABLED")
-    portfolio_max_stops_per_day: int = Field(default=3, alias="PORTFOLIO_MAX_STOPS_PER_DAY")
-    portfolio_daily_loss_halt_pct: float = Field(default=0.06, alias="PORTFOLIO_DAILY_LOSS_HALT_PCT")
-    portfolio_heat_warn_pct: float = Field(default=0.08, alias="PORTFOLIO_HEAT_WARN_PCT")
-    portfolio_heat_halt_pct: float = Field(default=0.12, alias="PORTFOLIO_HEAT_HALT_PCT")
+    portfolio_monitor_enabled: bool = Field(default=True)
+    portfolio_max_stops_per_day: int = Field(default=3)
+    portfolio_daily_loss_halt_pct: float = Field(default=0.06)
+    portfolio_heat_warn_pct: float = Field(default=0.08)
+    portfolio_heat_halt_pct: float = Field(default=0.12)
 
-    # Logging
-    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    # Sensitive fields that may be supplied via Docker secrets (in addition to
+    # the base's redis_password / telegram_bot_token / telegram_chat_id).
+    SECRET_FIELDS: ClassVar[tuple[str, ...]] = (
+        "redis_password",
+        "telegram_bot_token",
+        "telegram_chat_id",
+        "db_password",
+        "twilio_account_sid",
+        "twilio_auth_token",
+    )
 
     @property
     def database_url(self) -> str:
@@ -75,12 +100,6 @@ class Settings(BaseSettings):
     @property
     def telegram_enabled(self) -> bool:
         return all([self.telegram_bot_token, self.telegram_chat_id])
-
-    model_config = {
-        "env_file": ".env",
-        "env_file_encoding": "utf-8",
-        "extra": "ignore",
-    }
 
 
 settings = Settings()

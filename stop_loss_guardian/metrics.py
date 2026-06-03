@@ -3,10 +3,23 @@
 Defines application-level metrics for monitoring the guardian's
 health, performance, and business-logic behavior.  All metrics
 use the ``guardian_`` prefix so they are easy to filter in Grafana.
+
+The Prometheus client classes (and the no-op fallback used when
+``prometheus_client`` is not installed) come from
+:mod:`trading_commons.metrics`, so this module no longer carries its own
+import shim — it only defines the guardian-specific metric set.
 """
 
 import logging
 import os
+
+from trading_commons.metrics import (
+    HAS_PROMETHEUS,
+    Counter,
+    Gauge,
+    Histogram,
+    start_http_server,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +55,7 @@ def _init_metrics() -> bool:
     global ALERTS_SENT, PORTFOLIO_HEAT, DAILY_PNL, PORTFOLIO_HALTED
     global CONSECUTIVE_ERRORS, DB_ERRORS, REDIS_ERRORS
 
-    try:
-        from prometheus_client import Counter, Gauge, Histogram
-    except ImportError:
+    if not HAS_PROMETHEUS:
         return False
 
     CHECK_CYCLES = Counter(
@@ -107,9 +118,7 @@ def _init_metrics() -> bool:
 
 def start_metrics_server() -> None:
     """Start Prometheus metrics HTTP server on METRICS_PORT (default 9098)."""
-    try:
-        from prometheus_client import start_http_server
-    except ImportError:
+    if not HAS_PROMETHEUS:
         logger.warning("prometheus_client not installed — metrics endpoint disabled")
         return
 

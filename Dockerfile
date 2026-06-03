@@ -9,8 +9,10 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
 # Install system dependencies
+# git is required to install trading-py-commons from its git+https URL.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user

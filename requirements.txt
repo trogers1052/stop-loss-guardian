@@ -1,5 +1,8 @@
 # Stop Loss Guardian Dependencies (pinned to production versions)
 
+# Shared platform infrastructure (config, metrics, redisx, telegram)
+trading-py-commons @ git+https://github.com/trogers1052/trading-py-commons.git@v0.1.0
+
 # Core
 pydantic==2.12.5
 pydantic-settings==2.13.1
@@ -13,8 +16,8 @@ redis==7.0.1
 # Twilio (SMS + Phone calls)
 twilio==9.10.2
 
-# HTTP client (for Telegram)
-httpx==0.28.1
+# HTTP client (for Telegram) — provided transitively by trading-py-commons,
+# which owns the Telegram client implementation.
 
 # Utilities
 python-dotenv==1.2.2

@@ -17,13 +17,22 @@ import pytest
 # Stub third-party packages that guardian code imports at module level.
 # Must happen before any stop_loss_guardian imports.
 # ---------------------------------------------------------------------------
+#
+# NOTE: ``pydantic_settings`` is intentionally NOT stubbed. The config layer
+# now builds on ``trading_commons.config.BaseServiceSettings`` (real
+# pydantic-settings), and ``trading_commons`` imports it at package import
+# time, so the real package must be available. The settings *singleton* is
+# still replaced with ``FakeSettings`` below so no environment/.env is read
+# during tests.
+# ``redis`` and ``httpx`` are likewise NOT stubbed: trading_commons.redisx /
+# trading_commons.telegram import them, and redisx references
+# ``redis.ConnectionError`` etc. at import time. The real packages are present
+# in the test environment; tests patch their entry points (``redis.Redis``,
+# ``httpx.Client`` / ``httpx.AsyncClient``) so no network I/O occurs.
 _STUB_MODS = [
     "twilio", "twilio.rest", "twilio.base", "twilio.base.exceptions",
     "psycopg2", "psycopg2.extras", "psycopg2.pool",
-    "redis",
-    "httpx",
     "telegram",
-    "pydantic_settings",
 ]
 for _mod in _STUB_MODS:
     if _mod not in sys.modules:
@@ -35,9 +44,6 @@ sys.modules["twilio.base.exceptions"].TwilioRestException = Exception
 sys.modules["psycopg2"].connect = lambda **kw: None
 sys.modules["psycopg2.extras"].RealDictCursor = object
 sys.modules["psycopg2.pool"].SimpleConnectionPool = unittest.mock.MagicMock
-
-# pydantic_settings stub
-sys.modules["pydantic_settings"].BaseSettings = object
 
 # ---------------------------------------------------------------------------
 # Stub Settings singleton

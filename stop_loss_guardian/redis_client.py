@@ -1,4 +1,16 @@
-"""Redis client for accessing Robinhood position data."""
+"""Redis client for accessing Robinhood position data.
+
+The connection lifecycle (client construction, reconnect, retry plumbing,
+``redis_url``) is inherited from :class:`trading_commons.redisx.RedisBase`.
+The retry helper is configured for no-sleep, single-retry parity
+(``backoff_base=0, max_retries=1``) so it never blocks the monitoring loop.
+
+The data-access methods (positions, account state, stop orders, drawdown
+cooldowns, and the earnings reader) keep the guardian's historical contract:
+every Redis error is swallowed, the REDIS_ERRORS counter is incremented, and
+a safe default is returned — never raised — so a transient Redis hiccup can
+never crash the capital-protection loop.
+"""
 
 import json
 import logging
@@ -11,18 +23,38 @@ import redis
 from .config import settings
 from .models import AccountState
 from . import metrics as m
+from trading_commons.redisx import RedisBase
 
 logger = logging.getLogger(__name__)
 
 
-class RedisClient:
+class RedisClient(RedisBase):
     """Client for accessing Robinhood position and account data from Redis."""
 
+    # Override RedisBase's ``client`` property with a plain attribute: the
+    # guardian and portfolio monitor read ``self.redis.client`` directly
+    # (including as a truthiness/``is None`` check when disconnected), and
+    # tests assign it, so it must be a settable, None-able attribute.
+    client = None
+
     def __init__(self):
+        super().__init__(
+            host=settings.redis_host,
+            port=settings.redis_port,
+            db=settings.redis_db,
+            password=settings.redis_password or None,
+            # No-sleep, single-retry parity for the retry plumbing.
+            max_retries=1,
+            backoff_base=0,
+        )
         self.client: Optional[redis.Redis] = None
 
     def connect(self):
-        """Establish Redis connection."""
+        """Establish Redis connection.
+
+        Raises on failure (the guardian aborts startup if Redis is
+        unreachable rather than running blind).
+        """
         try:
             self.client = redis.Redis(
                 host=settings.redis_host,
