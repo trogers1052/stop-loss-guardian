@@ -216,15 +216,23 @@ class TestDrawdownCooldowns:
 
 class TestGetEarningsDate:
     def test_found(self, redis_client):
-        redis_client.client.hget.return_value = json.dumps({
-            "next_earnings_date": "2026-03-15",
+        # Mirrors the writer (robinhood-sync EarningsCalendarStore):
+        # per-symbol STRING key "robinhood:earnings:{SYMBOL}" whose JSON
+        # carries the date under the "date" field.
+        redis_client.client.get.return_value = json.dumps({
+            "date": "2026-03-15",
+            "timing": "am",
+            "verified": True,
+            "days_away": 12,
         })
         assert redis_client.get_earnings_date("AAPL") == "2026-03-15"
+        # Reads the exact key shape the writer uses.
+        redis_client.client.get.assert_called_once_with("robinhood:earnings:AAPL")
 
     def test_not_found(self, redis_client):
-        redis_client.client.hget.return_value = None
+        redis_client.client.get.return_value = None
         assert redis_client.get_earnings_date("AAPL") is None
 
     def test_bad_json(self, redis_client):
-        redis_client.client.hget.return_value = "not-json"
+        redis_client.client.get.return_value = "not-json"
         assert redis_client.get_earnings_date("AAPL") is None

@@ -244,11 +244,11 @@ class RedisClient:
             ISO-format date string (e.g. '2026-03-15') or None if not available.
         """
         try:
-            data_str = self.client.hget("robinhood:earnings", symbol)
+            data_str = self.client.get(f"robinhood:earnings:{symbol}")
             if not data_str:
                 return None
             data = json.loads(data_str)
-            return data.get("next_earnings_date")
+            return data.get("date")
         except Exception as e:
             if m.REDIS_ERRORS is not None:
                 m.REDIS_ERRORS.inc()

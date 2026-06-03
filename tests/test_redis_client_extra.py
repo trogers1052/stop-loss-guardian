@@ -87,7 +87,7 @@ class TestErrorBranches:
         redis_client.set_drawdown_cooldown("AAPL", datetime.now(timezone.utc))
 
     def test_get_earnings_date_error_returns_none(self, redis_client):
-        redis_client.client.hget.side_effect = RuntimeError("boom")
+        redis_client.client.get.side_effect = RuntimeError("boom")
         assert redis_client.get_earnings_date("AAPL") is None
 
     def test_get_all_stop_orders_parses_and_skips_bad(self, redis_client):
