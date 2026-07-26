@@ -97,18 +97,24 @@ class Repository:
             self._pool = None
 
     def get_open_positions(self) -> List[Position]:
-        """Get all open positions from journal_positions table."""
+        """Get all currently-held positions from the authoritative positions table.
+
+        Sources from `positions` (the broker snapshot maintained by stock-service
+        from Robinhood's live positions), NOT journal_positions. journal_positions
+        is an order-flow-derived ledger that can drift out of sync (e.g. sells not
+        reprocessed after an outage), leaving stale status='open' rows that make the
+        guardian monitor phantom holdings and falsely halt the portfolio. The
+        positions table has one net row per held symbol (UNIQUE on symbol).
+        """
         query = """
             SELECT
-                jp.id as position_id,
-                jp.symbol,
-                jp.entry_price,
-                jp.quantity,
-                jp.entry_date,
-                jp.status
-            FROM journal_positions jp
-            WHERE jp.status = 'open'
-            ORDER BY jp.entry_date DESC
+                p.id as position_id,
+                p.symbol,
+                p.entry_price,
+                p.quantity,
+                p.entry_date
+            FROM positions p
+            ORDER BY p.entry_date DESC
         """
         try:
             with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -429,18 +435,16 @@ class Repository:
             WHERE ua.stop_loss_tracking_id IN (
                 SELECT slt.id FROM stop_loss_tracking slt
                 WHERE
-                    -- Case 1: linked to a specific position that is no longer open
+                    -- Case 1: linked to a specific position no longer held
                     (slt.position_id IS NOT NULL AND NOT EXISTS (
-                        SELECT 1 FROM journal_positions jp
-                        WHERE jp.id = slt.position_id
-                          AND jp.status = 'open'
+                        SELECT 1 FROM positions p
+                        WHERE p.id = slt.position_id
                     ))
                     OR
-                    -- Case 2: unlinked row (NULL position_id) and symbol has no open positions
+                    -- Case 2: unlinked row (NULL position_id) and symbol no longer held
                     (slt.position_id IS NULL AND NOT EXISTS (
-                        SELECT 1 FROM journal_positions jp
-                        WHERE jp.symbol = slt.symbol
-                          AND jp.status = 'open'
+                        SELECT 1 FROM positions p
+                        WHERE p.symbol = slt.symbol
                     ))
             )
         """
@@ -448,18 +452,16 @@ class Repository:
         delete_tracking_query = """
             DELETE FROM stop_loss_tracking slt
             WHERE
-                -- Case 1: linked to a specific position that is no longer open
+                -- Case 1: linked to a specific position no longer held
                 (slt.position_id IS NOT NULL AND NOT EXISTS (
-                    SELECT 1 FROM journal_positions jp
-                    WHERE jp.id = slt.position_id
-                      AND jp.status = 'open'
+                    SELECT 1 FROM positions p
+                    WHERE p.id = slt.position_id
                 ))
                 OR
-                -- Case 2: unlinked row (NULL position_id) and symbol has no open positions
+                -- Case 2: unlinked row (NULL position_id) and symbol no longer held
                 (slt.position_id IS NULL AND NOT EXISTS (
-                    SELECT 1 FROM journal_positions jp
-                    WHERE jp.symbol = slt.symbol
-                      AND jp.status = 'open'
+                    SELECT 1 FROM positions p
+                    WHERE p.symbol = slt.symbol
                 ))
         """
         try:
