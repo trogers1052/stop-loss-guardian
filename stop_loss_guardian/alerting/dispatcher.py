@@ -77,6 +77,20 @@ class AlertDispatcher:
             success = sms_result is not None or call_result is not None
             twilio_sid = call_result or sms_result
 
+        # Fallback: if an escalated (SMS/phone) channel failed — e.g. Twilio is
+        # disabled — deliver via Telegram anyway. A critical alert (no stop loss)
+        # reaching you on a quieter channel beats failing silently every cycle.
+        if not success and channel != AlertChannel.TELEGRAM:
+            logger.warning(
+                f"{channel.value} delivery failed for {alert.alert_type.value} "
+                f"{alert.symbol}; falling back to Telegram"
+            )
+            fallback_message = f"[escalated — {channel.value} unavailable]\n{message}"
+            if self.telegram.send_alert(fallback_message):
+                success = True
+                twilio_sid = None
+                channel = AlertChannel.TELEGRAM  # reflect actual delivery channel
+
         # Log the alert to database
         if success:
             try:
