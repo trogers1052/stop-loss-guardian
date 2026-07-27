@@ -120,11 +120,44 @@ class TestDispatch:
         result = mock_dispatcher.dispatch(alert, current_escalation_level=0)
         assert result is False
 
-    def test_failed_sms_returns_false(self, mock_dispatcher):
+    def test_failed_sms_falls_back_to_telegram(self, mock_dispatcher):
+        """Twilio disabled/failed on an URGENT alert → deliver via Telegram, not fail."""
         mock_dispatcher.twilio.send_sms.return_value = None
         alert = self._make_alert(severity=Severity.URGENT)
         result = mock_dispatcher.dispatch(alert, current_escalation_level=1)
+        assert result is True
+        mock_dispatcher.telegram.send_alert.assert_called_once()
+        # The fallback message flags that the louder channel was unavailable.
+        sent = mock_dispatcher.telegram.send_alert.call_args[0][0]
+        assert "escalated" in sent and "sms" in sent
+
+    def test_failed_phone_falls_back_to_telegram(self, mock_dispatcher):
+        """The critical case: no-stop-loss CRITICAL → phone dead → Telegram delivers."""
+        mock_dispatcher.twilio.send_sms.return_value = None
+        mock_dispatcher.twilio.make_call.return_value = None
+        alert = self._make_alert(severity=Severity.CRITICAL)
+        result = mock_dispatcher.dispatch(alert, current_escalation_level=2)
+        assert result is True
+        mock_dispatcher.telegram.send_alert.assert_called_once()
+
+    def test_returns_false_only_when_all_channels_fail(self, mock_dispatcher):
+        """If the escalated channel AND the Telegram fallback both fail, report failure."""
+        mock_dispatcher.twilio.send_sms.return_value = None
+        mock_dispatcher.twilio.make_call.return_value = None
+        mock_dispatcher.telegram.send_alert.return_value = False
+        alert = self._make_alert(severity=Severity.CRITICAL)
+        result = mock_dispatcher.dispatch(alert, current_escalation_level=2)
         assert result is False
+
+    def test_fallback_logs_delivery_as_telegram(self, mock_dispatcher):
+        """DB log should record the channel actually used (Telegram), not the failed one."""
+        mock_dispatcher.twilio.send_sms.return_value = None
+        mock_dispatcher.twilio.make_call.return_value = None
+        alert = self._make_alert(severity=Severity.CRITICAL)
+        mock_dispatcher.dispatch(alert, stop_loss_tracking_id=7)
+        assert mock_dispatcher.repo.log_urgent_alert.called
+        logged_channel = mock_dispatcher.repo.log_urgent_alert.call_args.kwargs["channel"]
+        assert logged_channel == AlertChannel.TELEGRAM
 
     def test_success_logs_to_db(self, mock_dispatcher):
         alert = self._make_alert()
