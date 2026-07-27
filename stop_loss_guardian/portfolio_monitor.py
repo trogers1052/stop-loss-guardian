@@ -123,6 +123,9 @@ class PortfolioMonitor:
         self._last_date: str = ""
         self._halt_alert_sent_today: bool = False
         self._stops_alerted_count: int = 0
+        # Edge-triggered dedup so standing conditions alert once, not every cycle.
+        self._heat_warn_active: bool = False
+        self._gap_alerted_symbols: set = set()
 
     def check(self, positions: List[Position]) -> Optional[PortfolioDailyState]:
         """Run all portfolio-level checks.
@@ -141,6 +144,8 @@ class PortfolioMonitor:
             self._stops_hit_today = []
             self._halt_alert_sent_today = False
             self._stops_alerted_count = 0
+            self._heat_warn_active = False
+            self._gap_alerted_symbols = set()
             self._last_date = today
 
         current_symbols = {p.symbol for p in positions}
@@ -497,18 +502,28 @@ class PortfolioMonitor:
                 severity="urgent",
             )
 
-        # High heat warning (actual heat, not configured)
+        # High heat warning (actual heat, not configured). Edge-triggered: a
+        # standing breach alerts once, not every monitoring cycle. Re-arms when
+        # heat clears (and at the daily rollover) so a genuine re-breach notifies.
         heat_warn = settings.portfolio_heat_warn_pct
         if state.actual_portfolio_heat > heat_warn and not state.halted:
-            self._send_alert(
-                f"Portfolio heat {state.actual_portfolio_heat:.1%} "
-                f"exceeds warning threshold {heat_warn:.0%}. "
-                f"Actual stop distances exceed configured risk.",
-                severity="warning",
-            )
+            if not self._heat_warn_active:
+                self._send_alert(
+                    f"Portfolio heat {state.actual_portfolio_heat:.1%} "
+                    f"exceeds warning threshold {heat_warn:.0%}. "
+                    f"Actual stop distances exceed configured risk.",
+                    severity="warning",
+                )
+                self._heat_warn_active = True
+        elif state.actual_portfolio_heat <= heat_warn:
+            # Cleared — re-arm for the next genuine breach.
+            self._heat_warn_active = False
 
-        # Gap risk alerts
+        # Gap risk alerts — dedup per symbol so a persistent gap alerts once/day.
+        current_gap_symbols = {gap["symbol"] for gap in state.gap_alerts}
         for gap in state.gap_alerts:
+            if gap["symbol"] in self._gap_alerted_symbols:
+                continue
             self._send_alert(
                 f"GAP RISK: {gap['symbol']} price ${gap['current_price']:.2f} "
                 f"is below stop ${gap['stop_price']:.2f}. "
@@ -517,6 +532,9 @@ class PortfolioMonitor:
                 f"(excess: {gap['excess_loss_pct']:.1%}).",
                 severity="urgent",
             )
+            self._gap_alerted_symbols.add(gap["symbol"])
+        # Drop symbols whose gap resolved so they can re-alert if it recurs.
+        self._gap_alerted_symbols &= current_gap_symbols
 
     def _send_alert(self, message: str, severity: str = "info") -> None:
         """Send a portfolio-level alert via Telegram."""
