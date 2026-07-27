@@ -426,6 +426,81 @@ class TestAlerts:
         assert "GAP RISK" in msg
         assert "CCJ" in msg
 
+    def _heat_calls(self, mock_telegram_client):
+        return [
+            c for c in mock_telegram_client.send_alert.call_args_list
+            if "exceeds warning threshold" in str(c)
+        ]
+
+    def test_heat_warning_sent_once_not_every_cycle(self, monitor, mock_telegram_client):
+        """The regression: a standing heat breach must alert once, not per cycle."""
+        state = PortfolioDailyState(trade_date="2026-03-07", actual_portfolio_heat=0.113)
+
+        monitor._check_thresholds_and_alert(state)
+        assert monitor._heat_warn_active is True
+        assert len(self._heat_calls(mock_telegram_client)) == 1
+
+        # Same breach on the next four cycles: no additional heat alerts.
+        for _ in range(4):
+            monitor._check_thresholds_and_alert(state)
+        assert len(self._heat_calls(mock_telegram_client)) == 1
+
+    def test_heat_warning_rearms_after_clearing(self, monitor, mock_telegram_client):
+        breached = PortfolioDailyState(trade_date="2026-03-07", actual_portfolio_heat=0.113)
+        cleared = PortfolioDailyState(trade_date="2026-03-07", actual_portfolio_heat=0.05)
+
+        monitor._check_thresholds_and_alert(breached)
+        monitor._check_thresholds_and_alert(cleared)
+        assert monitor._heat_warn_active is False
+        # A genuine re-breach must alert again.
+        monitor._check_thresholds_and_alert(breached)
+        assert len(self._heat_calls(mock_telegram_client)) == 2
+
+    def test_heat_warning_suppressed_when_halted(self, monitor, mock_telegram_client):
+        """Halt alert covers it; heat warning must not pile on."""
+        state = PortfolioDailyState(
+            trade_date="2026-03-07", halted=True, halt_reason="x",
+            actual_portfolio_heat=0.20,
+        )
+        monitor._check_thresholds_and_alert(state)
+        assert len(self._heat_calls(mock_telegram_client)) == 0
+
+    def test_gap_alert_deduped_per_symbol(self, monitor, mock_telegram_client):
+        gap = {
+            "symbol": "CCJ", "stop_price": 47.0, "current_price": 44.0,
+            "planned_loss_pct": -0.06, "actual_loss_pct": -0.12, "excess_loss_pct": -0.06,
+        }
+        state = PortfolioDailyState(trade_date="2026-03-07", gap_alerts=[gap])
+
+        for _ in range(3):
+            monitor._check_thresholds_and_alert(state)
+        gap_calls = [c for c in mock_telegram_client.send_alert.call_args_list if "GAP RISK" in str(c)]
+        assert len(gap_calls) == 1
+
+    def test_gap_alert_rearms_when_gap_resolves(self, monitor, mock_telegram_client):
+        gap = {
+            "symbol": "CCJ", "stop_price": 47.0, "current_price": 44.0,
+            "planned_loss_pct": -0.06, "actual_loss_pct": -0.12, "excess_loss_pct": -0.06,
+        }
+        breached = PortfolioDailyState(trade_date="2026-03-07", gap_alerts=[gap])
+        resolved = PortfolioDailyState(trade_date="2026-03-07", gap_alerts=[])
+
+        monitor._check_thresholds_and_alert(breached)   # alert 1
+        monitor._check_thresholds_and_alert(resolved)   # gap cleared → forget CCJ
+        assert "CCJ" not in monitor._gap_alerted_symbols
+        monitor._check_thresholds_and_alert(breached)   # recurs → alert 2
+        gap_calls = [c for c in mock_telegram_client.send_alert.call_args_list if "GAP RISK" in str(c)]
+        assert len(gap_calls) == 2
+
+    def test_daily_rollover_rearms_heat_warning(self, monitor):
+        """A new trading day re-arms dedup so a still-standing breach re-alerts once."""
+        monitor._heat_warn_active = True
+        monitor._gap_alerted_symbols = {"CCJ"}
+        monitor._last_date = "2000-01-01"  # force rollover
+        monitor.check([])  # empty positions; triggers the new-day reset
+        assert monitor._heat_warn_active is False
+        assert monitor._gap_alerted_symbols == set()
+
 
 # ------------------------------------------------------------------
 # Full check cycle
